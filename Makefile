@@ -3,7 +3,7 @@ TARGETS = $(basename $(wildcard *.c))
 
 CFLAGS=-Wall -g
 
-all:
-	$(TARGETS) 
+ex19: object.o
+ex22_main: ex22.o
 clean:
-	rm -f $(TARGETS) 
+	rm -f $(TARGETS) *.o
