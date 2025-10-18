@@ -86,6 +86,6 @@ int main(int argc, char *argv[])
     while (!quit) {
         inst_cycle();
     }
-moxiang
+
     return 0;
 }
