@@ -1,7 +1,9 @@
+#include <klib-macros.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <am.h>
 
 #define WRITE_REG(idx, value) do {if(idx!=0) R[idx] = (value);} while(0)  // 确保R[0]始终为0
 #define MEM_SIZE (1 * 1024 * 1024)  // 模拟 1MB 内存
@@ -12,36 +14,62 @@ uint8_t *M = NULL;
 int same_cnt = 0;
 int ebreak = 0;
 
+#define VIDEO_MEM_BASE 0x20000000
+#define VIDEO_MEM_SIZE (256 * 256 * 4)    // 256 KB
+#define VIDEO_MEM_LIMIT (VIDEO_MEM_BASE + VIDEO_MEM_SIZE)
+
+// 视频显存
+uint8_t video_mem[VIDEO_MEM_SIZE];  // 存放像素数据 (RGBA 每像素 4字节)
+
+static inline int is_video_addr(uint32_t addr) {
+    return addr >= VIDEO_MEM_BASE && addr < VIDEO_MEM_LIMIT;
+}
+
 // 读一个字节
 static inline uint8_t mem_read8(uint32_t addr) {
-    return M[addr];
+    if (is_video_addr(addr)) {
+        return video_mem[addr - VIDEO_MEM_BASE];
+    } else {
+        return M[addr];
+    }
 }
 // 写一个字节
 static inline void mem_write8(uint32_t addr, uint8_t val) {
-    M[addr] = val;
+    if (is_video_addr(addr)) {
+        video_mem[addr - VIDEO_MEM_BASE] = val;
+    } else {
+        M[addr] = val;
+    }
 }
-// 读一个16位半字
-static inline uint16_t mem_read16(uint32_t addr) {
-    return (uint16_t)M[addr] | ((uint16_t)M[addr+1] << 8);
-}
-// 写一个16位半字
-static inline void mem_write16(uint32_t addr, uint16_t val) {
-    M[addr]   = val & 0xFF;
-    M[addr+1] = (val >> 8) & 0xFF;
-}
-// 读一个32位字
+// 读一个 32 位字
 static inline uint32_t mem_read32(uint32_t addr) {
-    return (uint32_t)M[addr] |
-           ((uint32_t)M[addr+1] << 8) |
-           ((uint32_t)M[addr+2] << 16) |
-           ((uint32_t)M[addr+3] << 24);
+    if (is_video_addr(addr)) {
+        addr -= VIDEO_MEM_BASE;
+        return (uint32_t)video_mem[addr] |
+               ((uint32_t)video_mem[addr+1] << 8) |
+               ((uint32_t)video_mem[addr+2] << 16) |
+               ((uint32_t)video_mem[addr+3] << 24);
+    } else {
+        return (uint32_t)M[addr] |
+               ((uint32_t)M[addr+1] << 8) |
+               ((uint32_t)M[addr+2] << 16) |
+               ((uint32_t)M[addr+3] << 24);
+    }
 }
-// 写一个32位字
+// 写一个 32 位字
 static inline void mem_write32(uint32_t addr, uint32_t val) {
-    M[addr]   =  val        & 0xFF;
-    M[addr+1] = (val >> 8)  & 0xFF;
-    M[addr+2] = (val >> 16) & 0xFF;
-    M[addr+3] = (val >> 24) & 0xFF;
+    if (is_video_addr(addr)) {
+        addr -= VIDEO_MEM_BASE;
+        video_mem[addr]   =  val        & 0xFF;
+        video_mem[addr+1] = (val >> 8)  & 0xFF;
+        video_mem[addr+2] = (val >> 16) & 0xFF;
+        video_mem[addr+3] = (val >> 24) & 0xFF;
+    } else {
+        M[addr]   =  val        & 0xFF;
+        M[addr+1] = (val >> 8)  & 0xFF;
+        M[addr+2] = (val >> 16) & 0xFF;
+        M[addr+3] = (val >> 24) & 0xFF;
+    }
 }
 
 /**
@@ -112,6 +140,21 @@ int32_t sign_extend(uint32_t val, int bits) {
     int32_t s = (int32_t)(val << (32 - bits)) >> (32 - bits);
     return s;
 }
+
+void draw_video_buffer() {
+    int width = 256;
+    int height = 256;
+
+    // 直接把视频显存的每一行送给 AM_GPU_FBDRAW
+    for (int y = 0; y < height; y++) {
+        io_write(AM_GPU_FBDRAW, 0, y, 
+                &video_mem[y * width * 4], 
+                width, 1, false);
+    }
+    // 最后刷新一次显示
+    io_write(AM_GPU_FBDRAW, 0, 0, NULL, 0, 0, true);
+}
+
 
 void inst_cycle() {
     uint32_t inst = mem_read32(PC);  // 取出当前指令
@@ -204,23 +247,22 @@ void inst_cycle() {
 }
 
 
-int main(int argc, char *argv[]) {
-    if(argc < 2) {
-        fprintf(stderr, "没有输入hex文件名\n");
-        return 1;
-    }
+int main(void) {
+    ioe_init();  // 初始化 GUI
 
-    M = init_memory_from_file(argv[1]);
+    M = init_memory_from_file("hex/vga.hex");
     if(!M) { fprintf(stderr, "内存分配失败\n"); return 1; }
 
     int cycles = 0;
-    while(cycles < 6000 && !ebreak) {
+    while(cycles < 628000 && !ebreak) {
         inst_cycle();  // 执行一条指令
         if(detect_deadloop()) break;
         cycles++;
     }
     //printf("R[10] = %d\n", R[10]);  // 输出 a0 的值
+    draw_video_buffer();   // 程序执行结束后绘制显存到屏幕
 
+    while(1);  // 保持GUI显示
     free(M);
     return 0;
 }
